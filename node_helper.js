@@ -187,6 +187,21 @@ module.exports = NodeHelper.create({
     this.expressApp.get("/system-info", (req, res) => {
       self.getSystemInfo(res);
     });
+
+    this.expressApp.get("/system-detail", (req, res) => {
+      const {query} = url.parse(req.url, true);
+      self.getSystemDetail(query.type || "cpu", res);
+    });
+
+    this.expressApp.get("/child-processes", (req, res) => {
+      const {query} = url.parse(req.url, true);
+      self.getChildProcesses(query.ppid, res);
+    });
+
+    this.expressApp.post("/kill-process", (req, res) => {
+      const {query} = url.parse(req.url, true);
+      self.killProcess(query.pid, res);
+    });
   },
 
   capitalizeFirst (string) { return capitalizeFirst(string); },
@@ -234,6 +249,164 @@ module.exports = NodeHelper.create({
       if (res) {
         res.json(info);
       }
+    });
+  },
+
+  getSystemDetail (type, res) {
+    const self = this;
+    let sortBy = "--sort=-%cpu"; // 默认按 CPU 排序
+
+    switch (type) {
+      case "memory":
+        sortBy = "--sort=-%mem";
+        break;
+      case "uptime":
+        sortBy = "--sort=start_time"; // 按启动时间排序
+        break;
+      case "storage":
+        sortBy = "--sort=-%cpu"; // 存储用 CPU，后面特殊处理
+        break;
+    }
+
+    const cmd = `ps aux ${sortBy} | head -6 | tail -5`;
+
+    exec(cmd, (error, stdout) => {
+      if (error) {
+        Log.error("[MMM-TMM-Control] 获取进程信息失败:", error);
+        res.json({processes: []});
+        return;
+      }
+
+      const lines = stdout.trim().split("\n");
+      const processes = [];
+
+      lines.forEach((line) => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 11) {
+          const pid = parts[1];
+          const cpu = parseFloat(parts[2]).toFixed(1);
+          const mem = parseFloat(parts[3]).toFixed(1);
+          const command = parts.slice(10).join(" ");
+
+          // 提取进程名称
+          let name = command.split(" ")[0];
+          if (name.includes("/")) {
+            name = name.split("/").pop();
+          }
+
+          // 尝试关联到 MagicMirror 模块
+          let mmModule = null;
+          if (command.includes("MMM-")) {
+            const match = command.match(/MMM-[A-Za-z0-9_-]+/);
+            if (match) {
+              mmModule = match[0];
+            }
+          }
+
+          // 检查是否有子进程
+          const checkChildren = new Promise((resolve) => {
+            exec(`ps --ppid ${pid} --no-headers | wc -l`, (err, stdout) => {
+              const childCount = err ? 0 : parseInt(stdout.trim());
+              resolve(childCount > 0);
+            });
+          });
+
+          processes.push({
+            pid,
+            cpu,
+            memory: mem + "%",
+            name,
+            command,
+            mmModule,
+            hasChildren: false // 先设为 false，后面更新
+          });
+        }
+      });
+
+      // 检查所有进程是否有子进程
+      Promise.all(
+        processes.map((proc) => {
+          return new Promise((resolve) => {
+            exec(`ps --ppid ${proc.pid} --no-headers | wc -l`, (err, stdout) => {
+              const childCount = err ? 0 : parseInt(stdout.trim());
+              proc.children = childCount > 0 ? [] : undefined;
+              resolve();
+            });
+          });
+        })
+      ).then(() => {
+        res.json({processes});
+      });
+    });
+  },
+
+  getChildProcesses (ppid, res) {
+    if (!ppid) {
+      res.json({processes: []});
+      return;
+    }
+
+    exec(`ps --ppid ${ppid} -o pid,%cpu,%mem,command --no-headers`, (error, stdout) => {
+      if (error) {
+        Log.error("[MMM-TMM-Control] 获取子进程失败:", error);
+        res.json({processes: []});
+        return;
+      }
+
+      const lines = stdout.trim().split("\n");
+      const processes = [];
+
+      lines.forEach((line) => {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length >= 4) {
+          const pid = parts[0];
+          const cpu = parseFloat(parts[1]).toFixed(1);
+          const mem = parseFloat(parts[2]).toFixed(1);
+          const command = parts.slice(3).join(" ");
+
+          let name = command.split(" ")[0];
+          if (name.includes("/")) {
+            name = name.split("/").pop();
+          }
+
+          let mmModule = null;
+          if (command.includes("MMM-")) {
+            const match = command.match(/MMM-[A-Za-z0-9_-]+/);
+            if (match) {
+              mmModule = match[0];
+            }
+          }
+
+          processes.push({
+            pid,
+            cpu,
+            memory: mem + "%",
+            name,
+            command,
+            mmModule
+          });
+        }
+      });
+
+      res.json({processes});
+    });
+  },
+
+  killProcess (pid, res) {
+    if (!pid) {
+      res.json({success: false, error: "未提供 PID"});
+      return;
+    }
+
+    exec(`kill ${pid}`, (error, stdout, stderr) => {
+      if (error) {
+        Log.error(`[MMM-TMM-Control] 终止进程 ${pid} 失败:`, error);
+        res.json({success: false, error: stderr || error.message});
+        return;
+      }
+
+      Log.log(`[MMM-TMM-Control] 成功终止进程 ${pid}`);
+      res.json({success: true});
     });
   },
 

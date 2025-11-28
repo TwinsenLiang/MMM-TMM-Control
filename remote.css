@@ -684,4 +684,216 @@ pre {
 .info-value {
   color: #fff;
   padding-right: 0.5em;
+  min-width: 4em;
+  text-align: right;
+}
+
+.info-value-with-arrow {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+  color: #fff;
+  padding-right: 0.5em;
+}
+
+.info-value-with-arrow .info-value {
+  padding-right: 0;
+  min-width: 3em;
+}
+
+.info-value-with-arrow .fa-angle-right {
+  margin-right: 0;
+  color: #666;
+  font-size: 1em;
+  transition: color 0.2s ease;
+}
+
+.info-item.clickable:hover .fa-angle-right {
+  color: #999;
+}
+
+/* 优化渲染性能 */
+.system-info-right {
+  will-change: auto;
+  contain: layout style;
+}
+
+.info-item {
+  will-change: auto;
+}
+
+/* CPU 详情项可点击样式 */
+.info-item.clickable {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.info-item.clickable:hover {
+  background-color: #333 !important;
+  border-color: #888;
+}
+
+/* 系统详情侧滑面板 - 通用 */
+.system-detail-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 400px;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.95);
+  border-left: 1px solid #666;
+  transform: translateX(100%);
+  transition: transform 0.3s ease;
+  z-index: 100;
+  display: flex;
+  flex-direction: column;
+}
+
+.system-detail-panel:not(.hidden) {
+  transform: translateX(0);
+}
+
+.system-detail-header {
+  display: flex;
+  align-items: center;
+  padding: 15px;
+  border-bottom: 1px solid #666;
+  color: #fff;
+  font-size: 1em;
+  gap: 10px;
+}
+
+#system-detail-back {
+  cursor: pointer;
+  font-size: 1.5em;
+  transition: color 0.2s ease;
+}
+
+#system-detail-back:hover {
+  color: #aaa;
+}
+
+.system-detail-title {
+  flex: 1;
+}
+
+.system-detail-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 15px;
+  color: #fff;
+}
+
+.system-detail-content .loading {
+  text-align: center;
+  color: #999;
+  padding: 20px;
+}
+
+.process-item {
+  display: flex;
+  flex-direction: column;
+  padding: 10px;
+  margin-bottom: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid #666;
+  border-radius: 5px;
+  font-size: 0.85em;
+}
+
+.process-item.has-children {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+}
+
+.process-item.has-children:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.process-item.child-process {
+  margin-left: 20px;
+  background: rgba(255, 255, 255, 0.03);
+  border-left: 3px solid #555;
+}
+
+.process-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 5px;
+  font-weight: bold;
+  gap: 10px;
+}
+
+.process-name {
+  color: #fff;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.process-name-with-arrow {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex: 1;
+  overflow: hidden;
+}
+
+.process-name-with-arrow .fa-angle-right {
+  color: #666;
+  font-size: 0.9em;
+  transition: transform 0.2s ease;
+}
+
+.process-item.has-children:hover .fa-angle-right {
+  color: #999;
+}
+
+.process-cpu {
+  color: #ff6b6b;
+  min-width: 60px;
+  text-align: right;
+}
+
+.process-kill-btn {
+  color: #ff6b6b;
+  cursor: pointer;
+  padding: 2px 6px;
+  border: 1px solid #ff6b6b;
+  border-radius: 3px;
+  font-size: 0.9em;
+  transition: all 0.2s ease;
+  background: transparent;
+}
+
+.process-kill-btn:hover {
+  background: #ff6b6b;
+  color: #fff;
+}
+
+.process-details {
+  display: flex;
+  justify-content: space-between;
+  color: #999;
+  font-size: 0.9em;
+  margin-top: 5px;
+}
+
+.process-pid {
+  color: #999;
+}
+
+.process-memory {
+  color: #999;
+}
+
+.process-mm-module {
+  margin-top: 5px;
+  padding: 5px;
+  background: rgba(100, 149, 237, 0.2);
+  border-left: 3px solid #6495ED;
+  color: #6495ED;
+  font-size: 0.85em;
 }

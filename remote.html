@@ -504,25 +504,49 @@
             <div class="system-info">
               <header class="module-header">系统信息</header>
               <div class="system-info-content">
-                <div class="info-item">
+                <div class="info-item clickable" id="cpu-usage-item">
                   <span class="info-label">CPU使用率:</span>
-                  <span class="info-value" id="cpu-usage">加载中...</span>
+                  <span class="info-value-with-arrow">
+                    <span class="info-value" id="cpu-usage">加载中...</span>
+                    <span class="fa fa-angle-right" aria-hidden="true"></span>
+                  </span>
                 </div>
-                <div class="info-item">
+                <div class="info-item clickable" id="memory-usage-item">
                   <span class="info-label">内存使用率:</span>
-                  <span class="info-value" id="memory-usage">加载中...</span>
+                  <span class="info-value-with-arrow">
+                    <span class="info-value" id="memory-usage">加载中...</span>
+                    <span class="fa fa-angle-right" aria-hidden="true"></span>
+                  </span>
                 </div>
-                <div class="info-item">
+                <div class="info-item clickable" id="uptime-item">
                   <span class="info-label">运行时间:</span>
-                  <span class="info-value" id="uptime">加载中...</span>
+                  <span class="info-value-with-arrow">
+                    <span class="info-value" id="uptime">加载中...</span>
+                    <span class="fa fa-angle-right" aria-hidden="true"></span>
+                  </span>
                 </div>
-                <div class="info-item">
+                <div class="info-item clickable" id="storage-usage-item">
                   <span class="info-label">存储使用:</span>
-                  <span class="info-value" id="storage-usage">加载中...</span>
+                  <span class="info-value-with-arrow">
+                    <span class="info-value" id="storage-usage">加载中...</span>
+                    <span class="fa fa-angle-right" aria-hidden="true"></span>
+                  </span>
                 </div>
               </div>
             </div>
           </div><!-- end of system-info-right -->
+
+          <!-- 系统详情侧滑面板 - 通用 -->
+          <div id="system-detail-panel" class="system-detail-panel hidden">
+            <div class="system-detail-header">
+              <span id="system-detail-back" class="fa fa-fw fa-angle-left"></span>
+              <span class="system-detail-title" id="system-detail-title">详情</span>
+            </div>
+            <div class="system-detail-content" id="system-detail-content">
+              <div class="loading">加载中...</div>
+            </div>
+          </div><!-- end of system-detail-panel -->
+
         </div><!-- end of main-content-wrapper -->
 
         <div id="result-overlay" class="overlay hidden"></div>

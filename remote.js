@@ -1938,15 +1938,193 @@ Remote.loadOtherElements();
 
 Remote.setStatus("none");
 
+// 系统详情面板功能 - 通用
+Remote.initSystemDetailPanel = function () {
+  const systemDetailPanel = document.getElementById("system-detail-panel");
+  const systemDetailBack = document.getElementById("system-detail-back");
+  const systemDetailTitle = document.getElementById("system-detail-title");
+  const systemDetailContent = document.getElementById("system-detail-content");
+
+  // 点击各个系统信息项
+  const infoItems = [
+    {id: "cpu-usage-item", title: "CPU 占用进程 TOP 5", type: "cpu"},
+    {id: "memory-usage-item", title: "内存占用进程 TOP 5", type: "memory"},
+    {id: "uptime-item", title: "系统运行进程", type: "uptime"},
+    {id: "storage-usage-item", title: "存储占用详情", type: "storage"}
+  ];
+
+  infoItems.forEach((item) => {
+    const element = document.getElementById(item.id);
+    element.addEventListener("click", () => {
+      systemDetailTitle.textContent = item.title;
+      Remote.hide(document.querySelector(".system-info-right"));
+      Remote.show(systemDetailPanel);
+      Remote.loadSystemDetail(item.type);
+    });
+  });
+
+  // 点击返回按钮
+  systemDetailBack.addEventListener("click", () => {
+    Remote.hide(systemDetailPanel);
+    Remote.show(document.querySelector(".system-info-right"));
+  });
+};
+
+// 加载系统详情
+Remote.loadSystemDetail = function (type) {
+  const systemDetailContent = document.getElementById("system-detail-content");
+  systemDetailContent.innerHTML = '<div class="loading">加载中...</div>';
+
+  fetch(`/system-detail?type=${type}`)
+    .then((response) => response.json())
+    .then((data) => {
+      if (data.processes && data.processes.length > 0) {
+        Remote.renderProcessList(data.processes, systemDetailContent);
+      } else {
+        systemDetailContent.innerHTML = '<div class="loading">无数据</div>';
+      }
+    })
+    .catch((error) => {
+      console.error("获取系统详情失败:", error);
+      systemDetailContent.innerHTML = '<div class="loading">加载失败</div>';
+    });
+};
+
+// 渲染进程列表
+Remote.renderProcessList = function (processes, container, isChild = false) {
+  let html = "";
+  processes.forEach((proc) => {
+    const hasChildren = proc.children && proc.children.length > 0;
+    const childClass = isChild ? "child-process" : "";
+    const hasChildrenClass = hasChildren ? "has-children" : "";
+
+    html += `
+      <div class="process-item ${childClass} ${hasChildrenClass}" data-pid="${proc.pid}" data-has-children="${hasChildren}">
+        <div class="process-header">
+          ${hasChildren ?
+            `<div class="process-name-with-arrow">
+              <span class="fa fa-angle-right" aria-hidden="true"></span>
+              <span class="process-name" title="${proc.command}">${proc.name}</span>
+            </div>` :
+            `<span class="process-name" title="${proc.command}">${proc.name}</span>`
+          }
+          <span class="process-cpu">${proc.cpu}%</span>
+          ${!hasChildren ? `<span class="process-kill-btn" data-pid="${proc.pid}">✕</span>` : ""}
+        </div>
+        <div class="process-details">
+          <span class="process-pid">PID: ${proc.pid}</span>
+          <span class="process-memory">内存: ${proc.memory}</span>
+        </div>
+        ${proc.mmModule ? `<div class="process-mm-module">模块: ${proc.mmModule}</div>` : ""}
+        ${hasChildren ? `<div class="process-children" data-pid="${proc.pid}" style="display:none;"></div>` : ""}
+      </div>
+    `;
+  });
+  container.innerHTML = html;
+
+  // 绑定展开子进程事件
+  container.querySelectorAll(".process-item.has-children").forEach((item) => {
+    item.addEventListener("click", (e) => {
+      if (e.target.classList.contains("process-kill-btn")) return;
+      const pid = item.getAttribute("data-pid");
+      const childrenContainer = item.querySelector(".process-children");
+      const arrow = item.querySelector(".fa-angle-right");
+
+      if (childrenContainer.style.display === "none") {
+        // 展开：加载子进程
+        Remote.loadChildProcesses(pid, childrenContainer, arrow);
+      } else {
+        // 收起
+        childrenContainer.style.display = "none";
+        arrow.style.transform = "rotate(0deg)";
+      }
+    });
+  });
+
+  // 绑定杀进程事件
+  container.querySelectorAll(".process-kill-btn").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const pid = btn.getAttribute("data-pid");
+      Remote.killProcess(pid);
+    });
+  });
+};
+
+// 加载子进程
+Remote.loadChildProcesses = function (ppid, container, arrow) {
+  container.innerHTML = '<div class="loading">加载中...</div>';
+  container.style.display = "block";
+  arrow.style.transform = "rotate(90deg)";
+
+  fetch(`/child-processes?ppid=${ppid}`)
+    .then((response) => response.json())
+    .then((data) => {
+      if (data.processes && data.processes.length > 0) {
+        Remote.renderProcessList(data.processes, container, true);
+      } else {
+        container.innerHTML = '<div class="loading" style="font-size:0.8em;color:#666;">无子进程</div>';
+      }
+    })
+    .catch((error) => {
+      console.error("获取子进程失败:", error);
+      container.innerHTML = '<div class="loading">加载失败</div>';
+    });
+};
+
+// 杀进程
+Remote.killProcess = function (pid) {
+  if (!confirm(`确定要终止进程 ${pid} 吗？`)) {
+    return;
+  }
+
+  fetch(`/kill-process?pid=${pid}`, {method: "POST"})
+    .then((response) => response.json())
+    .then((data) => {
+      if (data.success) {
+        alert(`进程 ${pid} 已终止`);
+        // 重新加载当前详情
+        const currentType = document.getElementById("system-detail-title").textContent;
+        const typeMap = {
+          "CPU 占用进程 TOP 5": "cpu",
+          "内存占用进程 TOP 5": "memory",
+          "系统运行进程": "uptime",
+          "存储占用详情": "storage"
+        };
+        Remote.loadSystemDetail(typeMap[currentType] || "cpu");
+      } else {
+        alert(`终止进程失败: ${data.error || "未知错误"}`);
+      }
+    })
+    .catch((error) => {
+      console.error("终止进程失败:", error);
+      alert("终止进程失败");
+    });
+};
+
+// 初始化系统详情面板
+Remote.initSystemDetailPanel();
+
 // 系统信息更新函数
 Remote.updateSystemInfo = function () {
   fetch("/system-info")
     .then((response) => response.json())
     .then((data) => {
-      document.getElementById("cpu-usage").textContent = data.cpuUsage || "N/A";
-      document.getElementById("memory-usage").textContent = data.memoryUsage || "N/A";
-      document.getElementById("uptime").textContent = data.uptime || "N/A";
-      document.getElementById("storage-usage").textContent = data.storageUsage || "N/A";
+      // 只在数据变化时更新 DOM，避免不必要的重绘
+      const cpuElem = document.getElementById("cpu-usage");
+      const memElem = document.getElementById("memory-usage");
+      const uptimeElem = document.getElementById("uptime");
+      const storageElem = document.getElementById("storage-usage");
+
+      const newCpu = data.cpuUsage || "N/A";
+      const newMem = data.memoryUsage || "N/A";
+      const newUptime = data.uptime || "N/A";
+      const newStorage = data.storageUsage || "N/A";
+
+      if (cpuElem.textContent !== newCpu) cpuElem.textContent = newCpu;
+      if (memElem.textContent !== newMem) memElem.textContent = newMem;
+      if (uptimeElem.textContent !== newUptime) uptimeElem.textContent = newUptime;
+      if (storageElem.textContent !== newStorage) storageElem.textContent = newStorage;
     })
     .catch((error) => {
       console.error("获取系统信息失败:", error);
