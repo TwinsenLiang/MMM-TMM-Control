@@ -62,7 +62,7 @@
   "ERROR": "错误!",
   "LOADING": "加载中 …",
 
-  "LOCKSTRING_WARNING": "This module was hidden by LIST_OF_MODULES, it can not be shown.",
+  "LOCKSTRING_WARNING": "此模块已被 LIST_OF_MODULES 隐藏，无法显示。",
   "FORCE_SHOW": "继续.",
 
   "UPDATE_MENU_NAME": "更新",

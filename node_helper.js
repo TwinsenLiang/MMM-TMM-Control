@@ -46,8 +46,7 @@ module.exports = NodeHelper.create({
 
     // load fall back translation
     self.loadTranslation("en");
-    // load Chinese translation
-    self.loadTranslation("zh-cn");
+    // Note: zh-cn will be loaded in combineConfig() based on config.language
 
     this.configOnHd = {};
     this.configData = {};
