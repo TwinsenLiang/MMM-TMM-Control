@@ -1965,6 +1965,11 @@ Remote.initSystemDetailPanel = function () {
 
   // 点击返回按钮
   systemDetailBack.addEventListener("click", () => {
+    // 清除定时器
+    if (Remote.systemDetailTimer) {
+      clearInterval(Remote.systemDetailTimer);
+      Remote.systemDetailTimer = null;
+    }
     Remote.hide(systemDetailPanel);
     Remote.show(document.querySelector(".system-info-right"));
   });
@@ -1975,19 +1980,66 @@ Remote.loadSystemDetail = function (type) {
   const systemDetailContent = document.getElementById("system-detail-content");
   systemDetailContent.innerHTML = '<div class="loading">加载中...</div>';
 
+  // 清除之前的定时器
+  if (Remote.systemDetailTimer) {
+    clearInterval(Remote.systemDetailTimer);
+    Remote.systemDetailTimer = null;
+  }
+
+  // 存储当前类型
+  Remote.currentDetailType = type;
+
+  // 加载初始数据
+  Remote.fetchSystemDetail(type, systemDetailContent);
+
+  // 对于 CPU/内存类型，2秒后开始实时刷新
+  if (type === "cpu" || type === "memory") {
+    setTimeout(() => {
+      Remote.systemDetailTimer = setInterval(() => {
+        Remote.fetchSystemDetail(type, systemDetailContent);
+      }, 2000); // 每2秒刷新一次
+    }, 2000); // 初始加载后等待2秒
+  }
+};
+
+// 获取系统详情数据
+Remote.fetchSystemDetail = function (type, container) {
   fetch(`/system-detail?type=${type}`)
     .then((response) => response.json())
     .then((data) => {
-      if (data.processes && data.processes.length > 0) {
-        Remote.renderProcessList(data.processes, systemDetailContent);
+      if (data.directories && data.directories.length > 0) {
+        // 存储类型：显示目录列表
+        Remote.renderDirectoryList(data.directories, container);
+      } else if (data.processes && data.processes.length > 0) {
+        // CPU/内存类型：显示进程列表
+        Remote.renderProcessList(data.processes, container);
       } else {
-        systemDetailContent.innerHTML = '<div class="loading">无数据</div>';
+        container.innerHTML = '<div class="loading">无数据</div>';
       }
     })
     .catch((error) => {
       console.error("获取系统详情失败:", error);
-      systemDetailContent.innerHTML = '<div class="loading">加载失败</div>';
+      container.innerHTML = '<div class="loading">加载失败</div>';
     });
+};
+
+// 渲染目录列表（存储类型）
+Remote.renderDirectoryList = function (directories, container) {
+  let html = "";
+  directories.forEach((dir) => {
+    html += `
+      <div class="process-item">
+        <div class="process-header">
+          <span class="process-name" title="${dir.path}">${dir.path.split('/').pop()}</span>
+          <span class="process-cpu">${dir.size}</span>
+        </div>
+        <div class="process-details">
+          <span class="process-pid">${dir.path}</span>
+        </div>
+      </div>
+    `;
+  });
+  container.innerHTML = html;
 };
 
 // 渲染进程列表
@@ -2008,7 +2060,7 @@ Remote.renderProcessList = function (processes, container, isChild = false) {
             </div>` :
             `<span class="process-name" title="${proc.command}">${proc.name}</span>`
           }
-          <span class="process-cpu">${proc.cpu}%</span>
+          <span class="process-cpu">${proc.cpu}%${proc.cpuRaw ? ` (${proc.cpuRaw}%)` : ''}</span>
           ${!hasChildren ? `<span class="process-kill-btn" data-pid="${proc.pid}">✕</span>` : ""}
         </div>
         <div class="process-details">

@@ -254,88 +254,198 @@ module.exports = NodeHelper.create({
 
   getSystemDetail (type, res) {
     const self = this;
-    let sortBy = "--sort=-%cpu"; // 默认按 CPU 排序
 
-    switch (type) {
-      case "memory":
-        sortBy = "--sort=-%mem";
-        break;
-      case "uptime":
-        sortBy = "--sort=start_time"; // 按启动时间排序
-        break;
-      case "storage":
-        sortBy = "--sort=-%cpu"; // 存储用 CPU，后面特殊处理
-        break;
+    // 存储类型：显示占用空间最大的目录
+    if (type === "storage") {
+      // 获取 /home 目录下占用最大的 TOP 5 目录
+      const cmd = "du -sh /home/mm/* 2>/dev/null | sort -hr | head -5";
+      exec(cmd, (error, stdout) => {
+        if (error) {
+          Log.error("[MMM-TMM-Control] 获取目录大小失败:", error);
+          res.json({directories: []});
+          return;
+        }
+
+        const lines = stdout.trim().split("\n");
+        const directories = lines.map((line) => {
+          const parts = line.split("\t");
+          return {
+            size: parts[0],
+            path: parts[1]
+          };
+        });
+
+        res.json({directories});
+      });
+      return;
     }
 
-    const cmd = `ps aux ${sortBy} | head -6 | tail -5`;
+    // 获取 CPU 核心数和总内存
+    const cpuCount = os.cpus().length; // CPU 核心数
+    const totalMem = os.totalmem(); // 总内存
 
-    exec(cmd, (error, stdout) => {
-      if (error) {
-        Log.error("[MMM-TMM-Control] 获取进程信息失败:", error);
-        res.json({processes: []});
-        return;
+    // CPU/内存：混合数据源
+    // 1. 先获取 PM2 管理的服务（有历史监控数据）
+    // 2. 再获取系统进程（瞬时值）
+    exec("pm2 jlist", (error, stdout) => {
+      let pm2Processes = [];
+
+      if (!error) {
+        try {
+          const pm2Data = JSON.parse(stdout);
+          const totalMem = os.totalmem(); // 获取系统总内存
+
+          pm2Processes = pm2Data
+            .filter(proc => proc.pm2_env.status === "online")
+            .map(proc => {
+              const monit = proc.monit || {};
+              const cpuRaw = monit.cpu || 0; // PM2 的 CPU（可以超过100%）
+              const memBytes = monit.memory || 0;
+              const memRaw = (memBytes / totalMem) * 100; // 占总内存的百分比
+
+              // 计算占总核数的比例
+              const cpuNormalized = cpuRaw / cpuCount;
+
+              return {
+                pid: proc.pid.toString(),
+                cpu: cpuNormalized.toFixed(1), // 占总核数的百分比
+                cpuRaw: cpuRaw.toFixed(1), // 原始值（括号内显示）
+                memory: memRaw.toFixed(1) + "%",
+                name: proc.name,
+                command: proc.pm2_env.pm_exec_path || proc.name,
+                mmModule: proc.name.startsWith("MMM-") ? proc.name : null,
+                isPM2: true
+              };
+            });
+        } catch (e) {
+          Log.error("[MMM-TMM-Control] 解析 PM2 数据失败:", e);
+        }
       }
 
-      const lines = stdout.trim().split("\n");
-      const processes = [];
+      // 获取系统进程
+      let sortBy = "--sort=-%cpu";
+      if (type === "memory") {
+        sortBy = "--sort=-%mem";
+      }
 
-      lines.forEach((line) => {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 11) {
-          const pid = parts[1];
-          const cpu = parseFloat(parts[2]).toFixed(1);
-          const mem = parseFloat(parts[3]).toFixed(1);
-          const command = parts.slice(10).join(" ");
+      const cmd = `ps aux ${sortBy} | grep -v 'ps aux' | grep -v grep | grep -v 'USER.*PID' | head -10`;
 
-          // 提取进程名称
-          let name = command.split(" ")[0];
-          if (name.includes("/")) {
-            name = name.split("/").pop();
-          }
+      exec(cmd, (error, stdout) => {
+        if (error) {
+          Log.error("[MMM-TMM-Control] 获取进程信息失败:", error);
+          res.json({processes: pm2Processes});
+          return;
+        }
 
-          // 尝试关联到 MagicMirror 模块
-          let mmModule = null;
-          if (command.includes("MMM-")) {
-            const match = command.match(/MMM-[A-Za-z0-9_-]+/);
-            if (match) {
-              mmModule = match[0];
+        const lines = stdout.trim().split("\n");
+        const systemProcesses = [];
+        const magicMirrorElectrons = []; // 收集 MagicMirror 的 Electron 子进程
+
+        lines.forEach((line) => {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 11) {
+            const pid = parts[1];
+            const cpu = parseFloat(parts[2]).toFixed(1);
+            const mem = parseFloat(parts[3]).toFixed(1);
+            const command = parts.slice(10).join(" ");
+
+            // 跳过 PM2 已经包含的进程
+            if (pm2Processes.some(p => p.pid === pid)) {
+              return;
             }
-          }
 
-          // 检查是否有子进程
-          const checkChildren = new Promise((resolve) => {
-            exec(`ps --ppid ${pid} --no-headers | wc -l`, (err, stdout) => {
-              const childCount = err ? 0 : parseInt(stdout.trim());
-              resolve(childCount > 0);
+            const cpuRaw = parseFloat(cpu);
+            const memRaw = parseFloat(mem);
+
+            // 如果是 MagicMirror 的 Electron 进程，收集起来合并
+            if (command.includes("/MagicMirror/node_modules/electron")) {
+              magicMirrorElectrons.push({
+                pid,
+                cpu: cpuRaw,
+                mem: memRaw,
+                command
+              });
+              return;
+            }
+
+            // 提取进程名称
+            let name = command.split(" ")[0];
+            if (name.includes("/")) {
+              name = name.split("/").pop();
+            }
+
+            // 尝试关联到 MagicMirror 模块
+            let mmModule = null;
+            if (command.includes("MMM-")) {
+              const match = command.match(/MMM-[A-Za-z0-9_-]+/);
+              if (match) {
+                mmModule = match[0];
+              }
+            }
+
+            // 计算占总核数的比例
+            const cpuNormalized = cpuRaw / cpuCount;
+
+            systemProcesses.push({
+              pid,
+              cpu: cpuNormalized.toFixed(1),
+              cpuRaw: cpuRaw.toFixed(1),
+              memory: memRaw.toFixed(1) + "%",
+              name,
+              command,
+              mmModule,
+              isPM2: false
             });
-          });
+          }
+        });
 
-          processes.push({
-            pid,
-            cpu,
-            memory: mem + "%",
-            name,
-            command,
-            mmModule,
-            hasChildren: false // 先设为 false，后面更新
+        // 合并 MagicMirror 的 Electron 进程
+        if (magicMirrorElectrons.length > 0) {
+          const totalCpuRaw = magicMirrorElectrons.reduce((sum, p) => sum + p.cpu, 0);
+          const totalMem = magicMirrorElectrons.reduce((sum, p) => sum + p.mem, 0);
+          const totalCpuNormalized = totalCpuRaw / cpuCount;
+          const mainElectron = magicMirrorElectrons[0];
+
+          systemProcesses.push({
+            pid: mainElectron.pid,
+            cpu: totalCpuNormalized.toFixed(1),
+            cpuRaw: totalCpuRaw.toFixed(1),
+            memory: totalMem.toFixed(1) + "%",
+            name: "MagicMirror (Electron)",
+            command: "MagicMirror Electron 进程组 (" + magicMirrorElectrons.length + " 个子进程)",
+            mmModule: null,
+            isPM2: false,
+            children: [] // 标记为有子进程，但不实际展开
           });
         }
-      });
 
-      // 检查所有进程是否有子进程
-      Promise.all(
-        processes.map((proc) => {
-          return new Promise((resolve) => {
-            exec(`ps --ppid ${proc.pid} --no-headers | wc -l`, (err, stdout) => {
-              const childCount = err ? 0 : parseInt(stdout.trim());
-              proc.children = childCount > 0 ? [] : undefined;
-              resolve();
+        // 合并 PM2 进程和系统进程
+        let allProcesses = [...pm2Processes, ...systemProcesses];
+
+        // 根据类型排序
+        if (type === "memory") {
+          allProcesses.sort((a, b) => parseFloat(b.memory) - parseFloat(a.memory));
+        } else {
+          allProcesses.sort((a, b) => parseFloat(b.cpu) - parseFloat(a.cpu));
+        }
+
+        // 取 TOP 5
+        const top5 = allProcesses.slice(0, 5);
+
+        // 检查这些进程是否有子进程
+        Promise.all(
+          top5.map((proc) => {
+            return new Promise((resolve) => {
+              exec(`ps --ppid ${proc.pid} --no-headers | wc -l`, (err, stdout) => {
+                const childCount = err ? 0 : parseInt(stdout.trim());
+                proc.children = childCount > 0 ? [] : undefined;
+                resolve();
+              });
             });
-          });
-        })
-      ).then(() => {
-        res.json({processes});
+          })
+        ).then(() => {
+          res.json({processes: top5});
+        });
       });
     });
   },
