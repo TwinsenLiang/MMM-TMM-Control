@@ -25,6 +25,7 @@ npm-debug.log*
 
 # Module data
 modules.json
+settings.json
 
 # Test files
 test/
