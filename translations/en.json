@@ -16,6 +16,7 @@
   "MONITORTIMED": "Turn monitor ON briefly",
   "RESTART": "Restart",
   "RESTARTMM": "Restart MagicMirror²",
+  "STOPMM": "Stop MagicMirror²",
   "SHUTDOWN": "Shutdown",
   "FULLSCREEN": "Toggle Fullscreen",
   "MINIMIZE": "Minimize Browser",

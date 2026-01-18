@@ -16,6 +16,7 @@
   "MONITORTIMED": "短暂打开显示器",
   "RESTART": "重启",
   "RESTARTMM": "重启 MagicMirror²",
+  "STOPMM": "停止 MagicMirror²",
   "SHUTDOWN": "关闭",
   "FULLSCREEN": "切换全屏",
   "MINIMIZE": "最小化魔镜",
