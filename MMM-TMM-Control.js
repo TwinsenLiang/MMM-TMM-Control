@@ -28,6 +28,13 @@ Module.register("MMM-TMM-Control", {
 
     this.brightness = 100;
     this.temp = 327;
+
+    // 显示器控制状态
+    this.monitorStatus = "on";
+    this.monitorOverlay = null;
+
+    // 创建显示器遮罩层
+    this.createMonitorOverlay();
   },
 
   getStyles () {
@@ -164,6 +171,21 @@ Module.register("MMM-TMM-Control", {
     if (notification === "NOTIFICATION") {
       this.sendNotification(payload.notification, payload.payload);
     }
+
+    // 显示器控制
+    if (notification === "MONITOR_ON") {
+      this.showMonitor();
+    }
+    if (notification === "MONITOR_OFF") {
+      this.hideMonitor();
+    }
+    if (notification === "MONITOR_TOGGLE") {
+      if (this.monitorStatus === "on") {
+        this.hideMonitor();
+      } else {
+        this.showMonitor();
+      }
+    }
   },
 
   setBrightness (newBrightnessValue) {
@@ -242,5 +264,62 @@ Module.register("MMM-TMM-Control", {
       remoteConfig: this.config
     };
     this.sendSocketNotification("CURRENT_STATUS", configData);
+  },
+
+  /**
+   * 创建显示器控制遮罩层（黑色全屏）
+   */
+  createMonitorOverlay() {
+    if (this.monitorOverlay) return;
+
+    this.monitorOverlay = document.createElement("div");
+    this.monitorOverlay.id = "monitor-overlay";
+    this.monitorOverlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: #000;
+      z-index: 99999;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 1s ease-in-out;
+    `;
+
+    document.body.appendChild(this.monitorOverlay);
+    Log.info(`${this.name}: Monitor overlay created`);
+  },
+
+  /**
+   * 显示显示器（隐藏黑色遮罩）
+   */
+  showMonitor() {
+    if (!this.monitorOverlay) {
+      this.createMonitorOverlay();
+    }
+
+    this.monitorOverlay.style.opacity = "0";
+    this.monitorOverlay.style.pointerEvents = "none";
+    this.monitorStatus = "on";
+
+    Log.info(`${this.name}: Monitor ON (overlay hidden)`);
+    this.sendSocketNotification("USER_PRESENCE", true);
+  },
+
+  /**
+   * 隐藏显示器（显示黑色遮罩）
+   */
+  hideMonitor() {
+    if (!this.monitorOverlay) {
+      this.createMonitorOverlay();
+    }
+
+    this.monitorOverlay.style.opacity = "1";
+    this.monitorOverlay.style.pointerEvents = "auto";
+    this.monitorStatus = "off";
+
+    Log.info(`${this.name}: Monitor OFF (overlay shown)`);
+    this.sendSocketNotification("USER_PRESENCE", false);
   }
 });
