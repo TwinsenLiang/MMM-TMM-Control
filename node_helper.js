@@ -21,6 +21,7 @@ const simpleGit = require("simple-git");
 const defaultModules = require(path.resolve(`${__dirname}/../../modules/default/defaultmodules.js`));
 const {capitalizeFirst, formatName, includes} = require("./lib/utils.js");
 const {cleanConfig} = require("./lib/configUtils.js");
+const ConfigLoader = require("./modules/config-loader.js");
 
 // eslint-disable-next-line no-global-assign
 Module = {
@@ -58,6 +59,16 @@ module.exports = NodeHelper.create({
     this.modulesInstalled = [];
 
     this.delayedQueryTimers = {};
+
+    // Initialize monitor status (for black overlay control)
+    this.monitorStatus = "on";
+
+    // Initialize window minimized status (Electron isMinimized() is unreliable on RPi)
+    this.windowMinimized = false;
+
+    // Initialize ConfigLoader
+    this.configLoader = null;
+    this.tclientConfig = null;
 
     fs.readFile(path.resolve(`${__dirname}/remote.html`), (err, data) => {
       self.template = data.toString();
@@ -202,6 +213,11 @@ module.exports = NodeHelper.create({
       const {query} = url.parse(req.url, true);
       self.killProcess(query.pid, res);
     });
+
+    // 清理垃圾文件
+    this.expressApp.post("/cleanup-trash", (req, res) => {
+      self.cleanupTrash(res);
+    });
   },
 
   capitalizeFirst (string) { return capitalizeFirst(string); },
@@ -257,25 +273,46 @@ module.exports = NodeHelper.create({
 
     // 存储类型：显示占用空间最大的目录
     if (type === "storage") {
-      // 获取 /home 目录下占用最大的 TOP 5 目录
-      const cmd = "du -sh /home/mm/* 2>/dev/null | sort -hr | head -5";
-      exec(cmd, (error, stdout) => {
-        if (error) {
-          Log.error("[MMM-TMM-Control] 获取目录大小失败:", error);
-          res.json({directories: []});
-          return;
-        }
+      // 获取 MagicMirror 存储占用：主程序 + 各个模块
+      const mmDir = "/home/mm/MagicMirror";
 
-        const lines = stdout.trim().split("\n");
-        const directories = lines.map((line) => {
-          const parts = line.split("\t");
-          return {
-            size: parts[0],
-            path: parts[1]
-          };
+      // 1. 计算 MagicMirror 主程序大小（排除 modules 目录）
+      const mainCmd = `du -sh --exclude=modules ${mmDir} 2>/dev/null | awk '{print $1}'`;
+
+      // 2. 获取每个模块的大小
+      const modulesCmd = `du -sh ${mmDir}/modules/* 2>/dev/null | sort -hr`;
+
+      exec(mainCmd, (mainError, mainStdout) => {
+        const mainSize = mainError ? "N/A" : mainStdout.trim();
+
+        exec(modulesCmd, (modulesError, modulesStdout) => {
+          const directories = [];
+
+          // 添加主程序
+          directories.push({
+            size: mainSize,
+            path: `${mmDir} (主程序，不含模块)`,
+            isMain: true
+          });
+
+          // 添加各个模块
+          if (!modulesError && modulesStdout) {
+            const lines = modulesStdout.trim().split("\n");
+            lines.forEach((line) => {
+              const parts = line.split("\t");
+              if (parts.length >= 2) {
+                const moduleName = parts[1].split("/").pop();
+                directories.push({
+                  size: parts[0],
+                  path: moduleName,
+                  isModule: true
+                });
+              }
+            });
+          }
+
+          res.json({directories});
         });
-
-        res.json({directories});
       });
       return;
     }
@@ -365,6 +402,30 @@ module.exports = NodeHelper.create({
                 mem: memRaw,
                 command
               });
+              return;
+            }
+
+            // 检查是否是相关进程（MagicMirror + 重要系统服务）
+            const isMagicMirrorRelated =
+              command.includes("MMM-") ||
+              command.includes("/MagicMirror/") ||
+              command.includes("node_modules") && command.includes("MagicMirror");
+
+            // 重要的系统进程（对理解资源使用有帮助）
+            const isImportantSystemProcess =
+              command.includes("pm2") ||           // PM2 进程管理器
+              command.includes("node") ||          // Node.js 进程
+              command.includes("electron") ||      // Electron 进程
+              command.includes("labwc") ||         // Wayland 合成器
+              command.includes("Xwayland") ||      // X 服务器
+              command.includes("pipewire") ||      // 音频服务
+              command.includes("chromium") ||      // 浏览器
+              command.includes("python") ||        // Python 进程（可能是模块后端）
+              command.includes("nginx") ||         // Web 服务器
+              command.includes("apache");          // Web 服务器
+
+            // 如果既不是 MagicMirror 相关也不是重要系统进程，跳过
+            if (!isMagicMirrorRelated && !isImportantSystemProcess) {
               return;
             }
 
@@ -517,6 +578,39 @@ module.exports = NodeHelper.create({
 
       Log.log(`[MMM-TMM-Control] 成功终止进程 ${pid}`);
       res.json({success: true});
+    });
+  },
+
+  // 清理垃圾文件
+  cleanupTrash (res) {
+    const path = require("path");
+    // 修改：调用 MagicMirror 根目录的 service.sh clean 命令
+    const scriptPath = path.join(__dirname, "../../service.sh");
+
+    Log.log("[MMM-TMM-Control] 开始清理垃圾文件...");
+
+    exec(`bash ${scriptPath} clean`, (error, stdout, stderr) => {
+      if (error) {
+        Log.error("[MMM-TMM-Control] 清理垃圾失败:", error);
+        res.json({success: false, error: stderr || error.message});
+        return;
+      }
+
+      try {
+        // 从输出中提取 JSON（service.sh 会输出额外的信息）
+        const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const result = JSON.parse(jsonMatch[0]);
+          Log.log("[MMM-TMM-Control] 垃圾清理完成:", result);
+          res.json(result);
+        } else {
+          throw new Error("未找到JSON输出");
+        }
+      } catch (parseError) {
+        Log.error("[MMM-TMM-Control] 解析清理结果失败:", parseError);
+        Log.log("[MMM-TMM-Control] 原始输出:", stdout);
+        res.json({success: false, error: "解析清理结果失败"});
+      }
     });
   },
 
@@ -861,15 +955,34 @@ module.exports = NodeHelper.create({
       return;
     }
     if (query.data === "mmUpdateAvailable") {
-      const sg = simpleGit(`${__dirname}/..`);
+      const self = this; // 保存 this 上下文
+      // 检查 MMM-TMM-Control 模块自己的 Git 仓库
+      const sg = simpleGit(__dirname);
+
+      // 添加超时保护和响应标志
+      let responded = false;
+      const timeout = setTimeout(() => {
+        if (!responded) {
+          responded = true;
+          console.error("[MMM-TMM-Control] Git fetch timeout, sending false");
+          self.sendResponse(res, undefined, {query, result: false});
+        }
+      }, 10000); // 10秒超时
+
       sg.fetch().status((err, data) => {
+        clearTimeout(timeout);
+        if (responded) return; // 已经超时响应了，不再处理
+
+        responded = true;
         if (!err) {
           if (data.behind > 0) {
-            this.sendResponse(res, undefined, {query, result: true});
+            self.sendResponse(res, undefined, {query, result: true});
             return;
           }
+        } else {
+          console.error("[MMM-TMM-Control] Git status check error:", err);
         }
-        this.sendResponse(res, undefined, {query, result: false});
+        self.sendResponse(res, undefined, {query, result: false});
       });
       return;
     }
@@ -1002,64 +1115,85 @@ module.exports = NodeHelper.create({
   },
 
   monitorControl (action, opts, res) {
-    let status = "unknown";
-    const offArr = [
-      "false",
-      "TV is off",
-      "standby",
-      "display_power=0"
-    ];
-    const monitorOnCommand = this.initialized && "monitorOnCommand" in this.thisConfig.customCommand
-      ? this.thisConfig.customCommand.monitorOnCommand
-      : "vcgencmd display_power 1";
-    const monitorOffCommand = this.initialized && "monitorOffCommand" in this.thisConfig.customCommand
-      ? this.thisConfig.customCommand.monitorOffCommand
-      : "vcgencmd display_power 0";
-    const monitorStatusCommand = this.initialized && "monitorStatusCommand" in this.thisConfig.customCommand
-      ? this.thisConfig.customCommand.monitorStatusCommand
-      : "vcgencmd display_power -1";
+    // 使用前端黑色遮罩层实现显示器控制，不需要执行系统命令
+    // 魔镜原理：屏幕黑色时，单面镜就变成普通镜子
+    let status = this.monitorStatus || "on";
+
+    Log.log(`[MMM-TMM-Control] monitorControl: action=${action}, current status=${status}`);
+
     switch (action) {
-      case "MONITORSTATUS": exec(monitorStatusCommand, opts, (error, stdout, stderr) => {
-        status = offArr.indexOf(stdout.trim()) !== -1
-          ? "off"
-          : "on";
-        this.checkForExecError(error, stdout, stderr, res, {monitor: status});
-
-      });
+      case "MONITORSTATUS":
+        this.sendResponse(res, undefined, {monitor: status});
         break;
-      case "MONITORTOGGLE": exec(monitorStatusCommand, opts, (error, stdout) => {
-        status = offArr.indexOf(stdout.trim()) !== -1
-          ? "off"
-          : "on";
-        if (status === "on") { this.monitorControl("MONITOROFF", opts, res); } else { this.monitorControl("MONITORON", opts, res); }
 
-      });
+      case "MONITORTOGGLE":
+        const newAction = status === "on" ? "MONITOROFF" : "MONITORON";
+        Log.log(`[MMM-TMM-Control] MONITORTOGGLE: current=${status}, switching to ${newAction}`);
+        // 直接处理切换逻辑，不递归调用以避免重复发送响应
+        if (newAction === "MONITORON") {
+          Log.log(`[MMM-TMM-Control] MONITORON: setting status to "on" and sending MONITOR_ON notification`);
+          this.monitorStatus = "on";
+          this.sendSocketNotification("MONITOR_ON");
+          this.sendResponse(res, undefined, {monitor: "on"});
+          this.sendSocketNotification("USER_PRESENCE", true);
+        } else {
+          Log.log(`[MMM-TMM-Control] MONITOROFF: setting status to "off" and sending MONITOR_OFF notification`);
+          this.monitorStatus = "off";
+          this.sendSocketNotification("MONITOR_OFF");
+          this.sendResponse(res, undefined, {monitor: "off"});
+          this.sendSocketNotification("USER_PRESENCE", false);
+        }
         break;
-      case "MONITORON": exec(monitorOnCommand, opts, (error, stdout, stderr) => {
-        this.checkForExecError(error, stdout, stderr, res, {monitor: "on"});
-      });
+
+      case "MONITORON":
+        Log.log(`[MMM-TMM-Control] MONITORON: setting status to "on" and sending MONITOR_ON notification`);
+        this.monitorStatus = "on";
+        this.sendSocketNotification("MONITOR_ON");
+        this.sendResponse(res, undefined, {monitor: "on"});
         this.sendSocketNotification("USER_PRESENCE", true);
         break;
-      case "MONITOROFF": exec(monitorOffCommand, opts, (error, stdout, stderr) => {
-        this.checkForExecError(error, stdout, stderr, res, {monitor: "off"});
-      });
+
+      case "MONITOROFF":
+        Log.log(`[MMM-TMM-Control] MONITOROFF: setting status to "off" and sending MONITOR_OFF notification`);
+        this.monitorStatus = "off";
+        this.sendSocketNotification("MONITOR_OFF");
+        this.sendResponse(res, undefined, {monitor: "off"});
         this.sendSocketNotification("USER_PRESENCE", false);
         break;
     }
   },
 
-  shutdownControl (action, opts) {
-    const shutdownCommand = this.initialized && "shutdownCommand" in this.thisConfig.customCommand
-      ? this.thisConfig.customCommand.shutdownCommand
-      : "sudo shutdown -h now";
-    const rebootCommand = this.initialized && "rebootCommand" in this.thisConfig.customCommand
-      ? this.thisConfig.customCommand.rebootCommand
-      : "sudo shutdown -r now";
+  shutdownControl (action, opts, res) {
+    const shutdownCommand = this.thisConfig?.customCommand?.shutdownCommand || "sudo shutdown -h now";
+    const rebootCommand = this.thisConfig?.customCommand?.rebootCommand || "sudo shutdown -r now";
+
+    // 先发送响应，因为系统即将关机/重启
     if (action === "SHUTDOWN") {
-      exec(shutdownCommand, opts, (error, stdout, stderr, res) => { this.checkForExecError(error, stdout, stderr, res); });
+      this.sendResponse(res, undefined, {action: "shutdown", info: "System shutting down...", status: "success"});
+      // 延迟执行，确保响应已发送
+      setTimeout(() => {
+        exec(shutdownCommand, opts, (error, stdout, stderr) => {
+          if (error) {
+            Log.error(`[MMM-TMM-Control] Shutdown error:`, error);
+          } else {
+            Log.log(`[MMM-TMM-Control] Shutdown command executed`);
+          }
+        });
+      }, 100);
     }
+
     if (action === "REBOOT") {
-      exec(rebootCommand, opts, (error, stdout, stderr, res) => { this.checkForExecError(error, stdout, stderr, res); });
+      this.sendResponse(res, undefined, {action: "reboot", info: "System rebooting...", status: "success"});
+      // 延迟执行，确保响应已发送
+      setTimeout(() => {
+        exec(rebootCommand, opts, (error, stdout, stderr) => {
+          if (error) {
+            Log.error(`[MMM-TMM-Control] Reboot error:`, error);
+          } else {
+            Log.log(`[MMM-TMM-Control] Reboot command executed`);
+          }
+        });
+      }, 100);
     }
   },
 
@@ -1222,6 +1356,8 @@ module.exports = NodeHelper.create({
     }
     if ([
       "MINIMIZE",
+      "TOGGLEMINIMIZE",
+      "MINIMIZESTATUS",
       "TOGGLEFULLSCREEN",
       "DEVTOOLS"
     ].indexOf(query.action) !== -1) {
@@ -1232,16 +1368,43 @@ module.exports = NodeHelper.create({
         switch (query.action) {
           case "MINIMIZE":
             win.minimize();
+            this.sendResponse(res);
+            break;
+          case "TOGGLEMINIMIZE":
+            Log.log(`[MMM-TMM-Control] TOGGLEMINIMIZE: current windowMinimized=${this.windowMinimized}`);
+            if (this.windowMinimized) {
+              // 窗口已最小化，恢复它
+              Log.log(`[MMM-TMM-Control] Restoring window from minimized state`);
+              win.restore();
+              win.show();
+              win.focus();
+              this.windowMinimized = false;
+              this.sendResponse(res, undefined, {minimized: false});
+            } else {
+              // 窗口未最小化，最小化它
+              Log.log(`[MMM-TMM-Control] Minimizing window`);
+              win.minimize();
+              this.windowMinimized = true;
+              this.sendResponse(res, undefined, {minimized: true});
+            }
+            break;
+          case "MINIMIZESTATUS":
+            this.sendResponse(res, undefined, {minimized: this.windowMinimized});
             break;
           case "TOGGLEFULLSCREEN":
             win.setFullScreen(!win.isFullScreen());
+            this.sendResponse(res);
             break;
           case "DEVTOOLS":
-            if (win.webContents.isDevToolsOpened()) { win.webContents.closeDevTools(); } else { win.webContents.openDevTools(); }
+            if (win.webContents.isDevToolsOpened()) {
+              win.webContents.closeDevTools();
+            } else {
+              win.webContents.openDevTools();
+            }
+            this.sendResponse(res);
             break;
           default:
         }
-        this.sendResponse(res);
       } catch (err) {
         this.sendResponse(res, err);
       }
@@ -1334,7 +1497,9 @@ module.exports = NodeHelper.create({
 
     const git = simpleGit(path);
     git.reset("hard").then(() => {
-      git.pull((error, result) => {
+      // 清理 untracked files 和目录，避免阻止 pull
+      git.clean('f', ['-d'], () => {
+        git.pull(['--ff-only'], (error, result) => {
         if (error) {
           // 检查是否是 SSH 权限错误
           if (error.message && error.message.includes("Permission denied (publickey)")) {
@@ -1370,13 +1535,13 @@ module.exports = NodeHelper.create({
                 }
 
                 // 重新尝试拉取
-                git.pull((error2, result2) => {
+                git.pull(['--ff-only'], (error2, result2) => {
                   if (error2) {
                     // 如果还是认证错误，尝试清除凭证缓存并重试
                     if (error2.message.includes("could not read Username") || error2.message.includes("Authentication failed")) {
                       Log.log("[MMM-TMM-Control] 尝试不使用凭证拉取...");
-                      // 使用 GIT_TERMINAL_PROMPT=0 禁用凭证提示
-                      exec(`cd "${path}" && GIT_TERMINAL_PROMPT=0 git pull`, {timeout: 30000}, (error3, stdout, stderr) => {
+                      // 使用 GIT_TERMINAL_PROMPT=0 禁用凭证提示，使用 --ff-only 避免分支分歧问题
+                      exec(`cd "${path}" && GIT_TERMINAL_PROMPT=0 git pull --ff-only`, {timeout: 30000}, (error3, stdout, stderr) => {
                         if (error3) {
                           let errorMsg = "这是一个私有仓库，需要配置 GitHub 访问令牌";
                           if (stderr.includes("Could not resolve host") || stderr.includes("无法访问") || stderr.includes("Failed to connect")) {
@@ -1447,6 +1612,7 @@ module.exports = NodeHelper.create({
         }
         self.handlePullResult(result, path, name, res);
       });
+      });
     }).catch((error) => {
       Log.error("[MMM-TMM-Control]", error);
       self.sendResponse(res, error, {reason: "git_reset_failed", message: error.message});
@@ -1502,56 +1668,64 @@ module.exports = NodeHelper.create({
 
   controlPm2 (res, query) {
     const actionName = query.action.toLowerCase();
+    const self = this;
 
-    // Check if PM2 is available
-    try {
-      require.resolve("pm2");
-    } catch {
-      // PM2 not installed
-      const message = `MagicMirror² is not running under PM2. Please ${actionName} manually.`;
-      Log.log(`[MMM-TMM-Control] ${message}`);
-      this.sendResponse(res, undefined, {action: actionName, info: message, status: "info"});
+    // Use service.sh script from MMM-TMM-Control directory
+    // __dirname is /path/to/MagicMirror/modules/MMM-TMM-Control
+    const serviceScriptPath = path.join(__dirname, "service.sh");
+
+    // Check if service.sh exists
+    if (!fs.existsSync(serviceScriptPath)) {
+      const message = `service.sh not found at ${serviceScriptPath}. Please ${actionName} manually.`;
+      Log.warn(`[MMM-TMM-Control] ${message}`);
+      this.sendResponse(res, undefined, {action: actionName, info: message, status: "warning"});
       return;
     }
 
-    const pm2 = require("pm2");
-    const processName = query.processName || this.thisConfig.pm2ProcessName || "mm";
+    // Send response immediately before executing
+    const message = `MagicMirror² ${actionName} command sent successfully`;
+    this.sendResponse(res, undefined, {action: actionName, info: message, status: "success"});
 
-    pm2.connect((err) => {
-      if (err) {
-        pm2.disconnect();
-        const message = `MagicMirror² is not running under PM2. Please ${actionName} manually.`;
-        Log.log(`[MMM-TMM-Control] ${message}`);
-        this.sendResponse(res, undefined, {action: actionName, info: message, status: "info"});
-        return;
-      }
+    // For restart, create a delayed restart script to survive process termination
+    if (actionName === "restart") {
+      const restartScript = `#!/bin/bash
+sleep 3
+cd ${__dirname}
+./service.sh restart
+`;
+      const scriptPath = "/tmp/mm_restart.sh";
 
-      // Check if process is running in PM2
-      pm2.list((err, list) => {
-        if (err || !list.find((proc) => proc.name === processName && proc.pm2_env.status === "online")) {
-          pm2.disconnect();
-          const message = `MagicMirror² is not running under PM2. Please ${actionName} manually.`;
-          Log.log(`[MMM-TMM-Control] ${message}`);
-          this.sendResponse(res, undefined, {action: actionName, info: message, status: "info"});
-          return;
+      // Write script and execute it in background
+      fs.writeFile(scriptPath, restartScript, {mode: 0o755}, (err) => {
+        if (err) {
+          Log.error(`[MMM-TMM-Control] Failed to create restart script:`, err);
+        } else {
+          // Execute the script in background, detached from current process
+          exec(`nohup ${scriptPath} > /dev/null 2>&1 &`, (error) => {
+            if (error) {
+              Log.error(`[MMM-TMM-Control] Failed to execute restart script:`, error);
+            } else {
+              Log.log(`[MMM-TMM-Control] Restart script launched, MM will restart in 3 seconds`);
+            }
+          });
         }
-
-        // Process is running in PM2, perform action
-        pm2[actionName](processName, (err) => {
-          pm2.disconnect();
-          if (err) {
-            Log.error(`[MMM-TMM-Control] PM2 ${actionName} error:`, err);
-            this.sendResponse(res, err);
+      });
+    } else {
+      // For stop, just run normally
+      setTimeout(() => {
+        exec("./service.sh stop", {cwd: __dirname, timeout: 15000}, (error, stdout, stderr) => {
+          if (error) {
+            Log.error(`[MMM-TMM-Control] Stop error:`, error);
           } else {
-            Log.log(`[MMM-TMM-Control] PM2 ${actionName}: ${processName}`);
-            this.sendResponse(res, undefined, {action: actionName, processName});
+            Log.log(`[MMM-TMM-Control] MagicMirror² stop command executed`);
           }
         });
-      });
-    });
+      }, 100);
+    }
   },
 
   translate (data) {
+    if (!this.translation) this.translation = {};
     Object.keys(this.translation).forEach((t) => {
       const pattern = `%%TRANSLATE:${t}%%`;
       const re = new RegExp(pattern, "g");
@@ -1616,13 +1790,12 @@ module.exports = NodeHelper.create({
   loadTranslation (language) {
     const self = this;
 
-    fs.readFile(path.resolve(`${__dirname}/translations/${language}.json`), (err, data) => {
-      if (err) {
-        return;
-      } else {
-        self.translation = {...self.translation, ...JSON.parse(data.toString())};
-      }
-    });
+    try {
+      const data = fs.readFileSync(path.resolve(`${__dirname}/translations/${language}.json`), 'utf8');
+      self.translation = {...self.translation, ...JSON.parse(data)};
+    } catch (err) {
+      Log.error(`[MMM-TMM-Control] Failed to load translation for language: ${language}`);
+    }
   },
 
   loadCustomMenus () {
@@ -1660,6 +1833,22 @@ module.exports = NodeHelper.create({
 
   socketNotificationReceived (notification, payload) {
     const self = this;
+
+    // TClient configuration loading
+    if (notification === "TCLIENT_LOAD_CONFIG") {
+      try {
+        const configPath = path.resolve(__dirname, payload.configFile || "config/config.json");
+        this.configLoader = new ConfigLoader(configPath);
+        this.tclientConfig = this.configLoader.load();
+
+        Log.info(`${self.name}: Configuration loaded successfully`);
+        self.sendSocketNotification("TCLIENT_CONFIG_LOADED", this.tclientConfig);
+      } catch (error) {
+        Log.error(`${self.name}: Error loading configuration: ${error.message}`);
+        self.sendSocketNotification("TCLIENT_CONFIG_ERROR", error.message);
+      }
+      return;
+    }
 
     if (notification === "CURRENT_STATUS") {
       this.configData = payload;

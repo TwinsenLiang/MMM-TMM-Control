@@ -27,10 +27,6 @@
       type="text/css"
       href="modules/MMM-TMM-Control/remote.css"
     />
-    <link
-      rel="apple-touch-icon"
-      href="modules/MMM-TMM-Control/img/apple-touch-icon.png"
-    />
     <meta name="apple-mobile-web-app-title" content="MagicRemote" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
@@ -44,7 +40,11 @@
   <body>
     <div class="container normal fill">
       <div id="module_1_MMM-TMM-Control" class="fill">
-        <header class="header">%%TRANSLATE:TITLE%%</header>
+        <header class="header">
+          <span id="breadcrumb-home" class="breadcrumb-item">%%TRANSLATE:TITLE%%</span>
+          <span id="breadcrumb-separator" class="breadcrumb-separator hidden"> >> </span>
+          <span id="breadcrumb-current" class="breadcrumb-item hidden"></span>
+        </header>
         <div class="main-content-wrapper">
           <div class="control-panel-left">
           <div class="menu above-fold">
@@ -262,6 +262,7 @@
               >
                 <span class="fa fa-fw fa-toggle-up" aria-hidden="true"></span>
                 <span class="text">%%TRANSLATE:UPDATE_MENU_NAME%%</span>
+                <span id="update-notification-dot" class="notification-dot hidden"></span>
                 <span class="fa fa-fw fa-angle-right" aria-hidden="true"></span>
               </div>
               <div
@@ -305,6 +306,13 @@
                 <span class="text">%%TRANSLATE:RESTARTMM%%</span>
               </div>
               <div
+                id="stop-mm-button"
+                class="menu-element hidden button power-menu"
+              >
+                <span class="fa fa-fw fa-stop-circle" aria-hidden="true"></span>
+                <span class="text">%%TRANSLATE:STOPMM%%</span>
+              </div>
+              <div
                 id="refresh-mm-button"
                 class="menu-element hidden button power-menu"
               >
@@ -312,35 +320,10 @@
                 <span class="text">%%TRANSLATE:REFRESHMM%%</span>
               </div>
               <div
-                id="monitor-on-button"
+                id="monitor-toggle-button"
                 class="menu-element hidden button power-menu"
               >
-                <span class="stack fa-fw">
-                  <span
-                    class="fa fa-fw fa-television outer-label fa-stack-1x"
-                    aria-hidden="true"
-                  ></span>
-                  <span
-                    class="fa fa-fw fa-check inner-monitor-label fa-stack-1x"
-                    aria-hidden="true"
-                  ></span>
-                </span>
-                <span class="text">%%TRANSLATE:MONITORON%%</span>
-              </div>
-              <div
-                id="monitor-off-button"
-                class="menu-element hidden button power-menu"
-              >
-                <span class="stack fa-fw">
-                  <span
-                    class="fa fa-fw fa-television outer-label fa-stack-1x"
-                    aria-hidden="true"
-                  ></span>
-                  <span
-                    class="fa fa-fw fa-close inner-monitor-label fa-stack-1x"
-                    aria-hidden="true"
-                  ></span>
-                </span>
+                <span class="fa fa-fw fa-television" aria-hidden="true"></span>
                 <span class="text">%%TRANSLATE:MONITOROFF%%</span>
               </div>
               <div
@@ -541,6 +524,10 @@
             <div class="system-detail-header">
               <span id="system-detail-back" class="fa fa-fw fa-angle-left"></span>
               <span class="system-detail-title" id="system-detail-title">详情</span>
+              <button class="cleanup-trash-button hidden" id="cleanup-trash-btn">
+                <span class="fa fa-trash"></span>
+                <span class="cleanup-text">清理垃圾</span>
+              </button>
             </div>
             <div class="system-detail-content" id="system-detail-content">
               <div class="loading">加载中...</div>

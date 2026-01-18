@@ -71,10 +71,21 @@ const Remote = {
    * argument payload mixed - The payload of the notification.
    */
   socketNotificationReceived (notification, payload) {
+
+    // 接收来自 updatenotification 模块的更新状态
+    if (notification === "TCLIENT_UPDATE_AVAILABLE") {
+      this.mmUpdateCallback(payload);
+      return;
+    }
+
     if (notification === "REMOTE_ACTION_RESULT") {
-      // console.log("Result received:", JSON.stringify(payload, undefined, 4));
       if ("action" in payload && payload.action === "INSTALL") {
         this.installCallback(payload);
+        return;
+      }
+      // 处理 mmUpdateAvailable (有 result 字段但没有 data 字段)
+      if ("result" in payload && payload.query && payload.query.data === "mmUpdateAvailable") {
+        this.mmUpdateCallback(payload.result);
         return;
       }
       if ("data" in payload) {
@@ -82,8 +93,6 @@ const Remote = {
           this.saveConfigCallback(payload);
         } else if (payload.query.data === "saves") {
           this.undoConfigMenuCallback(payload);
-        } else if (payload.query.data === "mmUpdateAvailable") {
-          this.mmUpdateCallback(payload.result);
         } else if (payload.query.data === "brightness") {
           const slider = document.getElementById("brightness-slider");
           slider.value = payload.result;
@@ -101,6 +110,40 @@ const Remote = {
         this.offerRestart(payload.chlog
           ? `${payload.info}<br><div id='changelog'>${chlog.makeHtml(payload.chlog)}</div>`
           : payload.info);
+        return;
+      }
+      // 处理显示器控制响应
+      if ("monitor" in payload) {
+        const monitorToggleBtn = document.getElementById("monitor-toggle-button");
+        const monitorBtnText = monitorToggleBtn.querySelector(".text");
+        const monitorBtnIcon = monitorToggleBtn.querySelector(".fa");
+
+        if (payload.monitor === "on") {
+          // 显示器已打开，按钮显示"关闭显示器"
+          monitorBtnText.textContent = this.translate("MONITOROFF");
+          monitorBtnIcon.className = "fa fa-fw fa-television";
+        } else if (payload.monitor === "off") {
+          // 显示器已关闭，按钮显示"打开显示器"
+          monitorBtnText.textContent = this.translate("MONITORON");
+          monitorBtnIcon.className = "fa fa-fw fa-television";
+        }
+        return;
+      }
+      // 处理窗口最小化/恢复响应
+      if ("minimized" in payload) {
+        const minimizeBtn = document.getElementById("minimize-button");
+        const minimizeBtnText = minimizeBtn.querySelector(".text");
+        const minimizeBtnIcon = minimizeBtn.querySelector(".fa");
+
+        if (payload.minimized) {
+          // 窗口已最小化，按钮变为"恢复魔镜"
+          minimizeBtnText.textContent = this.translate("RESTORE");
+          minimizeBtnIcon.className = "fa fa-fw fa-window-maximize";
+        } else {
+          // 窗口已恢复，按钮变为"最小化魔镜"
+          minimizeBtnText.textContent = this.translate("MINIMIZE");
+          minimizeBtnIcon.className = "fa fa-fw fa-window-minimize";
+        }
         return;
       }
       if ("success" in payload) {
@@ -146,7 +189,6 @@ const Remote = {
     if (notification === "RESTART") {
       setTimeout(() => {
         document.location.reload();
-        console.log("Delayed REFRESH");
       }, 62000);
       return;
     }
@@ -166,7 +208,6 @@ const Remote = {
     Object.keys(buttons).forEach((key) => {
       document.getElementById(key).addEventListener("click", buttons[key], false);
     });
-    console.log("buttons loaded");
   },
 
   translate (pattern) {
@@ -249,6 +290,8 @@ const Remote = {
     const popupContents = document.getElementById("popup-contents");
     if (popupContainer) popupContainer.style.display = "none";
     if (popupContents) popupContents.innerHTML = "";
+    // 关闭弹窗后重置面包屑到主菜单
+    this.updateBreadcrumb("main-menu");
   },
 
   showPopup () {
@@ -297,7 +340,61 @@ const Remote = {
       deleteButton.style.display = "none";
     }, false);
 
-    console.log("loadOtherElements loaded");
+    // 面包屑点击事件：点击主标题返回主菜单
+    const breadcrumbHome = document.getElementById("breadcrumb-home");
+    breadcrumbHome.addEventListener("click", () => {
+      if (self.currentMenu !== "main-menu") {
+        window.location.hash = "main-menu";
+      }
+    }, false);
+
+    // 查询显示器当前状态并设置按钮可见性
+    self.sendSocketNotification("REMOTE_ACTION", {action: "MONITORSTATUS"});
+
+    // 查询窗口最小化状态并设置按钮文字
+    self.sendSocketNotification("REMOTE_ACTION", {action: "MINIMIZESTATUS"});
+
+    // 页面加载时主动检查一次更新，显示小红点
+    self.sendSocketNotification("REMOTE_ACTION", {data: "mmUpdateAvailable"});
+
+  },
+
+  /**
+   * 更新面包屑导航
+   * @param {string} menu - 当前菜单名称
+   */
+  updateBreadcrumb (menu) {
+    const breadcrumbSeparator = document.getElementById("breadcrumb-separator");
+    const breadcrumbCurrent = document.getElementById("breadcrumb-current");
+    const breadcrumbHome = document.getElementById("breadcrumb-home");
+
+    // 菜单名称映射
+    const menuNameMap = {
+      "power-menu": "SHUTDOWN_MENU_NAME",
+      "edit-menu": "EDIT_MENU_NAME",
+      "settings-menu": "CONFIGURE_MENU_NAME",
+      "update-menu": "UPDATE_MENU_NAME",
+      "alert-menu": "ALERT_MENU_NAME",
+      "add-module-menu": "ADD_MODULE",
+      "classes-menu": "MODULE_CONTROLS"
+    };
+
+    if (menu === "main-menu") {
+      // 主菜单：只显示主标题
+      this.hide(breadcrumbSeparator);
+      this.hide(breadcrumbCurrent);
+      breadcrumbCurrent.textContent = "";  // 清空内容
+      breadcrumbHome.style.cursor = "default";
+    } else {
+      // 子菜单：显示面包屑
+      const menuNameKey = menuNameMap[menu];
+      if (menuNameKey) {
+        breadcrumbCurrent.textContent = this.translate(menuNameKey);
+        this.show(breadcrumbSeparator);
+        this.show(breadcrumbCurrent);
+        breadcrumbHome.style.cursor = "pointer";
+      }
+    }
   },
 
   showMenu (newMenu) {
@@ -331,6 +428,9 @@ const Remote = {
         return;
       }
     }
+
+    // 更新面包屑
+    this.updateBreadcrumb(newMenu);
 
     const belowFold = document.getElementById("below-fold");
     if (newMenu === "main-menu") {
@@ -682,12 +782,10 @@ const Remote = {
   },
 
   loadBrightness () {
-    console.log("Load brightness...");
     this.sendSocketNotification("REMOTE_ACTION", {data: "brightness"});
   },
 
   loadTemp () {
-    console.log("Load color temperature...");
     this.sendSocketNotification("REMOTE_ACTION", {data: "temp"});
   },
 
@@ -731,7 +829,6 @@ const Remote = {
   loadVisibleModules () {
     const self = this;
 
-    console.log("Load visible modules...");
 
     this.loadList("visible-modules", "modules", (parent, moduleData) => {
       for (let i = 0; i < moduleData.length; i++) {
@@ -925,10 +1022,8 @@ const Remote = {
         const input = self.createConfigInput(key, value, true);
         input.type = "checkbox";
         label.appendChild(input);
-        console.log(value);
         if (value) {
           input.checked = true;
-          console.log(input.checked);
         }
 
         self.createVisualCheckbox(key, label, input, "fa-check-square-o", false);
@@ -1139,8 +1234,15 @@ const Remote = {
       self.savedData.config.modules[index] = self.getModuleConfigFromUI();
       self.changedModules.push(index);
       const parent = document.getElementById(`edit-module-${index}`).parentNode;
-      if (parent.children.length === 2) {
-        parent.insertBefore(self.createChangedWarning(), parent.children[1]);
+
+      // 检查是否已存在警告图标
+      const existingWarning = parent.querySelector(".fa-warning");
+      if (!existingWarning) {
+        // 在删除按钮前插入警告图标
+        const deleteBtn = parent.querySelector(".type-edit");
+        if (deleteBtn) {
+          parent.insertBefore(self.createChangedWarning(), deleteBtn);
+        }
       }
       self.closePopup();
     });
@@ -1269,6 +1371,13 @@ const Remote = {
     for (let i = 0; i < moduleData.length; i++) {
       const innerWrapper = document.createElement("div");
       innerWrapper.className = "module-line";
+      innerWrapper.setAttribute("data-module-index", i);  // 添加索引标记
+
+      // 【新增】拖拽把手
+      const dragHandle = document.createElement("span");
+      dragHandle.className = "drag-handle";
+      dragHandle.innerHTML = '<span class="fa fa-fw fa-bars"></span>';
+      innerWrapper.appendChild(dragHandle);
 
       const moduleBox = self.createSymbolText("fa fa-fw fa-pencil", self.formatName(moduleData[i].module), (event) => {
         const i = event.currentTarget.id.replace("edit-module-", "");
@@ -1282,7 +1391,9 @@ const Remote = {
       }
 
       const remove = Remote.createSymbolText("fa fa-fw fa-times-circle", this.translate("DELETE_ENTRY"), (event) => {
-        const i = event.currentTarget.parentNode.firstChild.id.replace("edit-module-", "");
+        // 修改：因为添加了拖拽把手，需要找到第二个子元素（moduleBox）
+        const moduleBox = event.currentTarget.parentNode.querySelector('[id^="edit-module-"]');
+        const i = moduleBox.id.replace("edit-module-", "");
         self.deletedModules.push(parseInt(i));
         const thisElement = event.currentTarget;
         thisElement.parentNode.parentNode.removeChild(thisElement.parentNode);
@@ -1292,12 +1403,93 @@ const Remote = {
 
       wrapper.appendChild(innerWrapper);
     }
+
+    // 【新增】初始化拖拽排序
+    self.initSortable(wrapper);
+  },
+
+  // 【新增】初始化 Sortable 拖拽排序
+  initSortable (wrapper) {
+    const self = this;
+
+    // 动态加载 Sortable.js（避免全局污染）
+    if (typeof Sortable === "undefined") {
+      const script = document.createElement("script");
+      script.src = "modules/MMM-TMM-Control/node_modules/sortablejs/Sortable.min.js";
+      script.onload = () => {
+        self.createSortableInstance(wrapper);
+      };
+      script.onerror = () => {
+        console.error("[MMM-TMM-Control] 无法加载 Sortable.js，拖拽排序功能不可用");
+      };
+      document.head.appendChild(script);
+    } else {
+      self.createSortableInstance(wrapper);
+    }
+  },
+
+  // 【新增】创建 Sortable 实例
+  createSortableInstance (wrapper) {
+    const self = this;
+
+    new Sortable(wrapper, {
+      animation: 150,
+      handle: ".drag-handle",  // 只能通过拖拽把手拖动
+      draggable: ".module-line",
+      ghostClass: "module-line-ghost",
+      chosenClass: "module-line-chosen",
+      dragClass: "module-line-drag",
+
+      onEnd: (evt) => {
+        // 拖拽结束后，更新 modules 数组顺序
+        const oldIndex = evt.oldIndex;
+        const newIndex = evt.newIndex;
+
+        if (oldIndex !== newIndex) {
+          // 更新配置数据（内存中）
+          const modules = self.savedData.config.modules;
+          const movedModule = modules.splice(oldIndex, 1)[0];
+          modules.splice(newIndex, 0, movedModule);
+
+
+          // 更新所有模块行的索引和 ID（不重新加载数据）
+          const moduleLines = wrapper.querySelectorAll(".module-line");
+          moduleLines.forEach((line, index) => {
+            // 更新 data-module-index
+            line.setAttribute("data-module-index", index);
+
+            // 更新模块编辑按钮的 ID
+            const editBtn = line.querySelector('[id^="edit-module-"]');
+            if (editBtn) {
+              editBtn.id = `edit-module-${index}`;
+            }
+
+            // 只标记被拖拽的模块（新位置）
+            if (index === newIndex) {
+              // 添加修改警告图标（如果还没有）
+              const existingWarning = line.querySelector(".fa-warning");
+              if (!existingWarning) {
+                const deleteBtn = line.querySelector(".type-edit");
+                if (deleteBtn) {
+                  line.insertBefore(self.createChangedWarning(), deleteBtn);
+                }
+              }
+
+              // 标记为已修改
+              if (self.changedModules.indexOf(index) === -1) {
+                self.changedModules.push(index);
+              }
+            }
+          });
+
+        }
+      }
+    });
   },
 
   loadConfigModules () {
     const self = this;
 
-    console.log("Loading modules in config...");
     this.changedModules = [];
 
     this.loadList("config-modules", "config", (parent, configData) => {
@@ -1323,7 +1515,6 @@ const Remote = {
   loadClasses () {
     const self = this;
 
-    console.log("Loading classes...");
     this.loadList("classes", "classes", (parent, classes) => {
       for (const i in classes) {
         const node = document.createElement("div");
@@ -1414,7 +1605,6 @@ const Remote = {
   loadModulesToAdd () {
     const self = this;
 
-    console.log("Loading modules to add...");
 
     this.loadList("add-module", "moduleAvailable", (parent, modules) => {
       for (let i = 0; i < modules.length; i++) {
@@ -1485,15 +1675,28 @@ const Remote = {
   },
 
   mmUpdateCallback (result) {
+
+    // 更新"更新"菜单页面内的状态元素
     if (window.location.hash.substring(1) == "update-menu") {
       const element = document.getElementById("update-mm-status");
-      const updateButton = document.getElementById("update-mm-button");
+      if (element) {
+        if (result) {
+          self.show(element);
+        } else {
+          self.hide(element);
+        }
+      }
+    }
+
+    // 无论在哪个页面，都更新主菜单的"更新"按钮提示小红点
+    const notificationDot = document.getElementById("update-notification-dot");
+    if (notificationDot) {
       if (result) {
-        self.show(element);
-        updateButton.className += " bright";
+        // 有更新：显示呼吸灯小红点
+        notificationDot.classList.remove("hidden");
       } else {
-        self.hide(element);
-        updateButton.className = updateButton.className.replace(" bright", "");
+        // 无更新：隐藏小红点
+        notificationDot.classList.add("hidden");
       }
     }
   },
@@ -1501,7 +1704,6 @@ const Remote = {
   loadModulesToUpdate () {
     const self = this;
 
-    console.log("Loading modules to update...");
 
     // also update mm info notification
     this.sendSocketNotification("REMOTE_ACTION", {data: "mmUpdateAvailable"});
@@ -1550,7 +1752,6 @@ const Remote = {
       const dates = {};
       for (const i in result.data) {
         dates[new Date(result.data[i])] = function () {
-          console.log(result.data[i]);
           self.undoConfig(result.data[i]);
         };
       }
@@ -1866,14 +2067,31 @@ const buttons = {
     Remote.sendSocketNotification("REMOTE_ACTION", {action: "RESTART"});
     setTimeout(() => {
       document.location.reload();
-      console.log("Delayed REFRESH");
     }, 60000);
   },
-  "monitor-on-button" () {
-    Remote.sendSocketNotification("REMOTE_ACTION", {action: "MONITORON"});
+  "stop-mm-button" () {
+    const self = Remote;
+
+    const wrapper = document.createElement("div");
+    const text = document.createElement("span");
+    text.innerHTML = self.translate("CONFIRM_STOP");
+    wrapper.appendChild(text);
+
+    const ok = self.createSymbolText("fa fa-stop-circle", self.translate("STOPMM"), () => {
+      Remote.sendSocketNotification("REMOTE_ACTION", {action: "STOP"});
+      self.setStatus("info", "MagicMirror² is stopping...");
+    });
+    wrapper.appendChild(ok);
+
+    const cancel = self.createSymbolText("fa fa-times", self.translate("CANCEL"), () => {
+      self.setStatus("none");
+    });
+    wrapper.appendChild(cancel);
+
+    self.setStatus(false, false, wrapper);
   },
-  "monitor-off-button" () {
-    Remote.sendSocketNotification("REMOTE_ACTION", {action: "MONITOROFF"});
+  "monitor-toggle-button" () {
+    Remote.sendSocketNotification("REMOTE_ACTION", {action: "MONITORTOGGLE"});
   },
   "refresh-mm-button" () {
     Remote.sendSocketNotification("REMOTE_ACTION", {action: "REFRESH"});
@@ -1882,7 +2100,7 @@ const buttons = {
     Remote.sendSocketNotification("REMOTE_ACTION", {action: "TOGGLEFULLSCREEN"});
   },
   "minimize-button" () {
-    Remote.sendSocketNotification("REMOTE_ACTION", {action: "MINIMIZE"});
+    Remote.sendSocketNotification("REMOTE_ACTION", {action: "TOGGLEMINIMIZE"});
   },
   "devtools-button" () {
     Remote.sendSocketNotification("REMOTE_ACTION", {action: "DEVTOOLS"});
@@ -1973,12 +2191,29 @@ Remote.initSystemDetailPanel = function () {
     Remote.hide(systemDetailPanel);
     Remote.show(document.querySelector(".system-info-right"));
   });
+
+  // 绑定清理垃圾按钮事件
+  const cleanupBtn = document.getElementById("cleanup-trash-btn");
+  if (cleanupBtn) {
+    cleanupBtn.addEventListener("click", () => {
+      Remote.cleanupTrash();
+    });
+  }
 };
 
 // 加载系统详情
 Remote.loadSystemDetail = function (type) {
   const systemDetailContent = document.getElementById("system-detail-content");
+  const cleanupBtn = document.getElementById("cleanup-trash-btn");
+
   systemDetailContent.innerHTML = '<div class="loading">加载中...</div>';
+
+  // 控制清理垃圾按钮的显示
+  if (type === "storage") {
+    cleanupBtn.classList.remove("hidden");
+  } else {
+    cleanupBtn.classList.add("hidden");
+  }
 
   // 清除之前的定时器
   if (Remote.systemDetailTimer) {
@@ -2044,11 +2279,31 @@ Remote.renderDirectoryList = function (directories, container) {
 
 // 渲染进程列表
 Remote.renderProcessList = function (processes, container, isChild = false) {
+  // 检查是否是关键系统进程（不可终止）
+  const isCriticalProcess = (proc) => {
+    const command = proc.command.toLowerCase();
+    const name = proc.name.toLowerCase();
+
+    // 关键进程列表
+    return (
+      command.includes("magicmirror") ||   // MagicMirror 主进程
+      name === "electron" ||                // Electron 主进程
+      name === "labwc" ||                   // Wayland 合成器
+      name === "xwayland" ||                // X 服务器
+      name === "pm2" ||                     // PM2 进程管理器
+      command.includes("pm2") ||            // PM2 相关进程
+      name === "pipewire" ||                // 音频服务
+      name === "systemd" ||                 // 系统守护进程
+      command.includes("/usr/lib/systemd") // systemd 相关服务
+    );
+  };
+
   let html = "";
   processes.forEach((proc) => {
     const hasChildren = proc.children && proc.children.length > 0;
     const childClass = isChild ? "child-process" : "";
     const hasChildrenClass = hasChildren ? "has-children" : "";
+    const canKill = !hasChildren && !isCriticalProcess(proc);
 
     html += `
       <div class="process-item ${childClass} ${hasChildrenClass}" data-pid="${proc.pid}" data-has-children="${hasChildren}">
@@ -2061,7 +2316,7 @@ Remote.renderProcessList = function (processes, container, isChild = false) {
             `<span class="process-name" title="${proc.command}">${proc.name}</span>`
           }
           <span class="process-cpu">${proc.cpu}%${proc.cpuRaw ? ` (${proc.cpuRaw}%)` : ''}</span>
-          ${!hasChildren ? `<span class="process-kill-btn" data-pid="${proc.pid}">✕</span>` : ""}
+          ${canKill ? `<span class="process-kill-btn" data-pid="${proc.pid}">✕</span>` : ""}
         </div>
         <div class="process-details">
           <span class="process-pid">PID: ${proc.pid}</span>
@@ -2151,6 +2406,48 @@ Remote.killProcess = function (pid) {
     .catch((error) => {
       console.error("终止进程失败:", error);
       alert("终止进程失败");
+    });
+};
+
+// 清理垃圾文件
+Remote.cleanupTrash = function () {
+  if (!confirm("确定要清理垃圾文件吗？\n将清理以下内容：\n- Core dump 文件\n- macOS 临时文件 (._*)\n- .DS_Store 文件")) {
+    return;
+  }
+
+  const cleanupBtn = document.getElementById("cleanup-trash-btn");
+  if (cleanupBtn) {
+    cleanupBtn.disabled = true;
+    cleanupBtn.querySelector(".cleanup-text").textContent = "清理中...";
+  }
+
+  fetch("/cleanup-trash", {method: "POST"})
+    .then((response) => response.json())
+    .then((data) => {
+      if (cleanupBtn) {
+        cleanupBtn.disabled = false;
+        cleanupBtn.querySelector(".cleanup-text").textContent = "清理垃圾";
+      }
+
+      if (data.success) {
+        const cleaned = data.cleaned;
+        const message = `清理完成！\n\nCore dump: ${cleaned.coreDump} 个\nmacOS 临时文件: ${cleaned.macTemp} 个\n.DS_Store: ${cleaned.dsStore} 个\n总大小: ${cleaned.totalSize}`;
+        alert(message);
+
+        // 重新加载存储详情
+        Remote.loadSystemDetail("storage");
+      } else {
+        alert(`清理失败: ${data.error || "未知错误"}`);
+      }
+    })
+    .catch((error) => {
+      console.error("清理垃圾失败:", error);
+      alert("清理垃圾失败");
+
+      if (cleanupBtn) {
+        cleanupBtn.disabled = false;
+        cleanupBtn.querySelector(".cleanup-text").textContent = "清理垃圾";
+      }
     });
 };
 
