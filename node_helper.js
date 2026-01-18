@@ -21,7 +21,6 @@ const simpleGit = require("simple-git");
 const defaultModules = require(path.resolve(`${__dirname}/../../modules/default/defaultmodules.js`));
 const {capitalizeFirst, formatName, includes} = require("./lib/utils.js");
 const {cleanConfig} = require("./lib/configUtils.js");
-const ConfigLoader = require("./modules/config-loader.js");
 
 // eslint-disable-next-line no-global-assign
 Module = {
@@ -65,10 +64,6 @@ module.exports = NodeHelper.create({
 
     // Initialize window minimized status (Electron isMinimized() is unreliable on RPi)
     this.windowMinimized = false;
-
-    // Initialize ConfigLoader
-    this.configLoader = null;
-    this.tclientConfig = null;
 
     fs.readFile(path.resolve(`${__dirname}/remote.html`), (err, data) => {
       self.template = data.toString();
@@ -1833,22 +1828,6 @@ cd ${__dirname}
 
   socketNotificationReceived (notification, payload) {
     const self = this;
-
-    // TClient configuration loading
-    if (notification === "TCLIENT_LOAD_CONFIG") {
-      try {
-        const configPath = path.resolve(__dirname, payload.configFile || "config/config.json");
-        this.configLoader = new ConfigLoader(configPath);
-        this.tclientConfig = this.configLoader.load();
-
-        Log.info(`${self.name}: Configuration loaded successfully`);
-        self.sendSocketNotification("TCLIENT_CONFIG_LOADED", this.tclientConfig);
-      } catch (error) {
-        Log.error(`${self.name}: Error loading configuration: ${error.message}`);
-        self.sendSocketNotification("TCLIENT_CONFIG_ERROR", error.message);
-      }
-      return;
-    }
 
     if (notification === "CURRENT_STATUS") {
       this.configData = payload;
